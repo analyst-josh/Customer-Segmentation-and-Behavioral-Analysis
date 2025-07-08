@@ -1,5 +1,5 @@
 -- -------------------------------------------------------------------------------------
-/* # Customer Segmentation and Behavioral Analysis */
+/*# Customer Segmentation and Behavioral Analysis*/
 -- -------------------------------------------------------------------------------------
 CREATE TABLE TRANSACTIONS (
 	UPC BIGINT,
@@ -33,7 +33,7 @@ CREATE TABLE CASUAL_LOOKUP (
 );
 
 -- -------------------------------------------------------------------------------------
--- --------------------------------- /* DATA CLEANING */ ---------------------------------
+-- --------------------------------- /*DATA CLEANING*/ ---------------------------------
 -- -------------------------------------------------------------------------------------
 --  ## //NULL CHECKS//
 
@@ -112,7 +112,10 @@ SELECT
 FROM
 	CASUAL_LOOKUP;
 
+	
+-- -------------------------------------------------------------------------------------
 -- ## //CHECKS//
+
 -- '-ve' or Zero Sales
 SELECT
 	*
@@ -136,10 +139,10 @@ LIMIT
 5100015055
 */
 
+
+-- -------------------------------------------------------------------------------------
+
 --dropping rows with -ve and 0 slaes 
-DELETE FROM TRANSACTIONS
-WHERE
-	DOLLAR_SALES <= 0;
 
 SELECT
 	COUNT(*)
@@ -148,7 +151,14 @@ FROM
 WHERE
 	DOLLAR_SALES <= 0;
 
+	
+DELETE FROM TRANSACTIONS
+WHERE
+	DOLLAR_SALES <= 0;
+
+
 -- Negative or Zero Units purchased
+
 SELECT
 	*
 FROM
@@ -160,6 +170,7 @@ LIMIT
 -- none
 
 -- -------------------------------------------------------------------------------------
+
 --  ## //VALUE CHECKS//
 -- day: 1–728
 SELECT DISTINCT
@@ -201,7 +212,6 @@ LIMIT
 	10;
 --none
 
-
 -- product data match 
 SELECT DISTINCT
 	UPC
@@ -215,7 +225,7 @@ WHERE
 			PRODUCT_LOOKUP P
 		WHERE
 			T.UPC = P.UPC
-	);
+);
 
 -- --------------------------------------QUICK STATS------------------------------------
 SELECT
@@ -232,12 +242,16 @@ SELECT
 	MAX(UNITS) AS MAX_UNITS_ORDERED,
 	AVG(UNITS) AS AVG_UNITS_ORDERED
 FROM
-	TRANSACTIONS;
+	TRANSACTIONS
+;
 -- 0.01	153.14	1.7599749657677884	510027	1	387	1	3316349	1	1	156	1.1966966301317478
+-- -------------------------------------------------------------------------------------
 
+ 
+-- -------------------------------------------------------------------------------------
+-- # Part 1: Household-Level Segmentation
+-- -------------------------------------------------------------------------------------
 /*
-# Part 1: Household-Level Segmentation
-
 ## TO IDENTIFY : 
 - High spend / high frequency,
 - Low spend / occasional
@@ -245,14 +259,23 @@ FROM
 
 ## Goal: Build profiles of customer frequency and spend
 */
--- ## 1. unique households 
+
+
+-- -------------------------------------------------------------------------------------
+-- 1.1 unique households 
 SELECT
 	COUNT(DISTINCT (HOUSEHOLD))
 FROM
-	TRANSACTIONS;
+	TRANSACTIONS
+;
 
 -- 509935 households
---## 2. total spend, units purchased, and transactions per household
+
+
+-- -------------------------------------------------------------------------------------
+
+-- 1.2 total spend, units purchased, and transactions per household
+
 SELECT
 	HOUSEHOLD,
 	SUM(DOLLAR_SALES) AS TOTAL_SPEND,
@@ -268,8 +291,11 @@ ORDER BY
 	TOTAL_UNITS_PURCHASED DESC
 ;
 
---## 3. Frequently of households shopping
--- Distribution of transactions per household
+-- -------------------------------------------------------------------------------------
+
+--1.3 How frequently do households shop?
+
+  -- Distribution of transactions per household
 WITH
 	HOUSEHOLD_TRANSACTION_COUNT AS (
 		SELECT
@@ -295,7 +321,7 @@ ORDER BY
 	TRANSACTION_PER_HOUSE ASC, PERCENTAGE_OF_HOUSEHOLDS DESC;
 
 
--- Average days between purchases
+  -- Average days between purchases
 
 WITH
 	TOTAL_TRANSACTION_DAYS AS (
@@ -332,9 +358,8 @@ GROUP BY
 ORDER BY
 	HOUSEHOLD;
 
-
 	
--- Distribution of Average Days Between Purchases
+  -- Distribution of Average Days Between Purchases
 
 WITH TOTAL_TRANSACTION_DAYS AS (
     SELECT
@@ -371,9 +396,10 @@ FROM
     HouseholdAverageIntervals;
 
 
+-- -------------------------------------------------------------------------------------
+-- 4. Percent of households used coupons */
 
--- # 4. Percent of households used coupons
---  Overall coupon penetration
+  --  Overall coupon penetration
 
 with totaluniquehouseholds as (
     select
@@ -394,7 +420,7 @@ from
     totaluniquehouseholds tuh;
 -- 7.789
 	
--- Coupon usage rate per household
+  -- Coupon usage rate per household
 
 SELECT 	
 	HOUSEHOLD, 	
@@ -414,12 +440,45 @@ HAVING
 ORDER BY
 	COUPONED_USAGE_PER_TRANSACTION DESC,TOTALTRANSACTIONS desc;
 
-
-*/
 -- -------------------------------------------------------------------------------------
-/*
-# Part 2: Loyalty & Switching
+-- summary
+-- -------------------------------------------------------------------------------------
+CREATE TABLE household_summary AS
+SELECT
+    t.household,
+    SUM(dollar_sales) AS total_spend,
+    COUNT(DISTINCT basket) AS total_transactions,
+    SUM(units) AS total_units,
+    ROUND(AVG(dbt.days_between_purchases), 2) AS avg_days_between_purchases,
+    ROUND(
+        COUNT(DISTINCT CASE WHEN coupon = 1 THEN basket END) * 100.0 /
+        COUNT(DISTINCT basket), 2
+    ) AS couponed_usage_rate
+FROM
+    transactions t
+LEFT JOIN (
+    SELECT
+        household,
+        day - LAG(day) OVER (PARTITION BY household ORDER BY day) AS days_between_purchases
+    FROM
+        transactions
+    GROUP BY
+        household,
+        day
+) dbt ON t.household = dbt.household
+WHERE
+    dollar_sales > 0 AND units > 0
+GROUP BY
+    t.household;
 
+\COPY household_summary TO 'C:\Users\JOSHUA\Downloads\household_summary.csv' DELIMITER ',' CSV HEADER;
+
+-- -------------------------------------------------------------------------------------
+-- # Part 2: Loyalty & Switching
+-- -------------------------------------------------------------------------------------
+
+
+/*
 ## Goal: Assess brand/category loyalty and switching
 
 5. What percent of category shoppers are loyal to a single brand?
