@@ -1,7 +1,7 @@
 # Customer Segmentation in Retail
 
 
- ## Segment households using frequency, monetary spend, coupon usage, and behavioral triggers to:
+ ## Segment households using frequency, monetary spend, coupon usage, and behavioral changes to:
    - Identify loyalists vs. switchers
    - Discover cross-category patterns
    - Understand coupon-driven behavior
