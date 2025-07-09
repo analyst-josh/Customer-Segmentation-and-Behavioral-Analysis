@@ -36,7 +36,7 @@ CREATE TABLE CASUAL_LOOKUP (
 -- --------------------------------- /*DATA CLEANING*/ ---------------------------------
 -- -------------------------------------------------------------------------------------
 --  ## //NULL CHECKS//
-
+-- -------------------------------------------------------------------------------------
 SELECT
 	COUNT(*) AS TOTAL_ROWS,
 	COUNT(*) FILTER (
@@ -112,10 +112,9 @@ SELECT
 FROM
 	CASUAL_LOOKUP;
 
-	
 -- -------------------------------------------------------------------------------------
 -- ## //CHECKS//
-
+-- -------------------------------------------------------------------------------------
 -- '-ve' or Zero Sales
 SELECT
 	*
@@ -139,9 +138,7 @@ LIMIT
 5100015055
 */
 
-
 -- -------------------------------------------------------------------------------------
-
 --dropping rows with -ve and 0 slaes 
 
 SELECT
@@ -170,8 +167,8 @@ LIMIT
 -- none
 
 -- -------------------------------------------------------------------------------------
-
 --  ## //VALUE CHECKS//
+-- -------------------------------------------------------------------------------------
 -- day: 1–728
 SELECT DISTINCT
 	DAY
@@ -226,43 +223,18 @@ WHERE
 		WHERE
 			T.UPC = P.UPC
 );
-
--- --------------------------------------QUICK STATS------------------------------------
-SELECT
-	MIN(DOLLAR_SALES) AS MIN_PRICE,
-	MAX(DOLLAR_SALES) AS MAX_PRICE,
-	AVG(DOLLAR_SALES) AS AVG_PRICE,
-	MAX(HOUSEHOLD) AS STARTING_CUSTOMER_ID,
-	MIN(HOUSEHOLD) AS ENDING_CUSTOMER_ID,
-	MAX(STORE) AS STARTING_STORE_ID,
-	MIN(STORE) AS ENDING_STORE_ID,
-	MAX(BASKET)AS MAX_TRIPS_TO_STORE,
-	MIN(BASKET) AS MIN_TRIPS_TO_STORE,
-	MIN(UNITS) AS MIN_UNITS_ORDERED,
-	MAX(UNITS) AS MAX_UNITS_ORDERED,
-	AVG(UNITS) AS AVG_UNITS_ORDERED
-FROM
-	TRANSACTIONS
-;
--- 0.01	153.14	1.7599749657677884	510027	1	387	1	3316349	1	1	156	1.1966966301317478
 -- -------------------------------------------------------------------------------------
-
- 
+-- ---------------------------------------ANALYSIS--------------------------------------
 -- -------------------------------------------------------------------------------------
 -- # Part 1: Household-Level Segmentation
 -- -------------------------------------------------------------------------------------
-/*
-## TO IDENTIFY : 
-- High spend / high frequency,
-- Low spend / occasional
-- Coupon-driven bargain shoppers
-
-## Goal: Build profiles of customer frequency and spend
-*/
-
-
+-- ## TO IDENTIFY : 
+-- High spend / high frequency,
+-- Low spend / occasional
+-- Coupon-driven bargain shoppers
 -- -------------------------------------------------------------------------------------
 -- 1.1 unique households 
+
 SELECT
 	COUNT(DISTINCT (HOUSEHOLD))
 FROM
@@ -273,7 +245,6 @@ FROM
 
 
 -- -------------------------------------------------------------------------------------
-
 -- 1.2 total spend, units purchased, and transactions per household
 
 SELECT
@@ -292,10 +263,8 @@ ORDER BY
 ;
 
 -- -------------------------------------------------------------------------------------
+--1.3 How frequently do households shop? Distribution of transactions per household
 
---1.3 How frequently do households shop?
-
-  -- Distribution of transactions per household
 WITH
 	HOUSEHOLD_TRANSACTION_COUNT AS (
 		SELECT
@@ -320,9 +289,8 @@ GROUP BY
 ORDER BY
 	TRANSACTION_PER_HOUSE ASC, PERCENTAGE_OF_HOUSEHOLDS DESC;
 
-
   -- Average days between purchases
-
+  
 WITH
 	TOTAL_TRANSACTION_DAYS AS (
 		SELECT
@@ -357,10 +325,9 @@ GROUP BY
 	HOUSEHOLD
 ORDER BY
 	HOUSEHOLD;
-
 	
   -- Distribution of Average Days Between Purchases
-
+  
 WITH TOTAL_TRANSACTION_DAYS AS (
     SELECT
         household,
@@ -395,11 +362,8 @@ SELECT
 FROM
     HouseholdAverageIntervals;
 
-
 -- -------------------------------------------------------------------------------------
--- 4. Percent of households used coupons */
-
-  --  Overall coupon penetration
+-- 4. Percent of households used coupons - Overall coupon penetration
 
 with totaluniquehouseholds as (
     select
@@ -443,6 +407,7 @@ ORDER BY
 -- -------------------------------------------------------------------------------------
 -- summary
 -- -------------------------------------------------------------------------------------
+
 CREATE TABLE household_summary AS
 SELECT
     t.household,
@@ -476,70 +441,355 @@ GROUP BY
 -- -------------------------------------------------------------------------------------
 -- # Part 2: Loyalty & Switching
 -- -------------------------------------------------------------------------------------
+-- 5. percent of category shoppers loyal to a single brand and ones that switch brands within a category
 
+WITH household_brand_category AS (
+    SELECT DISTINCT
+        t.household,
+        p.commodity AS category,
+        p.brand
+    FROM
+        transactions t
+    JOIN product_lookup p ON t.upc = p.upc
+), 
+brand_count_per_household AS (
+    SELECT
+        household,
+        category,
+        COUNT(DISTINCT brand) AS brand_count
+    FROM
+        household_brand_category
+    GROUP BY
+        household, category
+)
+SELECT
+    category,
+    COUNT(*) AS total_households,
+    COUNT(*) FILTER (WHERE brand_count = 1) AS brand_loyals,
+    ROUND(COUNT(*) FILTER (WHERE brand_count = 1) * 100.0 / COUNT(*),2) AS brand_loyalty_rate,
+	COUNT(*) FILTER (WHERE brand_count > 1) AS switchers,
+    ROUND(COUNT(*) FILTER (WHERE brand_count > 1) * 100.0 / COUNT(*), 2) AS switch_rate
+FROM
+    brand_count_per_household
+GROUP BY
+    category
+ORDER BY
+    category asc;
 
-/*
-## Goal: Assess brand/category loyalty and switching
+-- -------------------------------------------------------------------------------------
+-- 6. Among households who used a coupon to try a brand for the first time, how many re-purchased that brand without a coupon?*/
+with purchase_order as (						      /* brand purchase per household */
+    select
+        t.household,
+        p.brand,
+        p.commodity,
+        t.coupon,
+        t.day,
+        row_number() over (
+            partition by t.household, p.brand
+            order by t.day
+        ) as purchase_rank
+    from
+        transactions t
+    join product_lookup p on p.upc = t.upc
+),
+firsttime_coupon_users as (                          /* first-time coupon users */
+    select
+        household,
+        brand,
+        commodity,
+        day
+    from
+        purchase_order
+    where
+        coupon = 1
+        and purchase_rank = 1
+),
+followup_purchasers as (                            /* follow-up purchase without coupon*/
+    select
+        p.household,
+        p.brand,
+        p.commodity
+    from
+        purchase_order p
+    join firsttime_coupon_users f
+        on p.household = f.household
+        and p.brand = f.brand
+        and p.day > f.day
+    where
+        p.coupon = 0
+    group by
+        p.household,
+        p.brand,
+        p.commodity
+) --  category-wise
+select
+    f.commodity,
+    count(distinct f.household) as total_first_coupon_users,
+    count(distinct fp.household) as retained_without_coupon,
+    round(
+        count(distinct fp.household) * 100.0 / count(distinct f.household),
+        2
+    ) as retention_rate_percent
+from
+    firsttime_coupon_users f
+left join
+    followup_purchasers fp
+    on f.household = fp.household
+    and f.brand = fp.brand
+    and f.commodity = fp.commodity
+group by
+    f.commodity
+order by
+    f.commodity asc;
 
-5. What percent of category shoppers are loyal to a single brand?
-6. What percent switch brands within a category?
-- Identify households purchasing multiple brands of Pasta
-7. Among households who used a coupon to try a brand for the first time, how many re-purchased that brand without a coupon?
-- Shows coupon-driven trial vs. retention
+-- -------------------------------------------------------------------------------------
+-- #Part 3: Pairing Behavior
+-- -------------------------------------------------------------------------------------
+-- frequently paired together 
+
+CREATE TABLE brand_pairs AS
+WITH household_brand_category AS (
+    SELECT DISTINCT
+        t.household,
+        p.brand,
+        p.commodity
+    FROM
+        transactions t
+    JOIN product_lookup p ON t.upc = p.upc
+),
+brand_pairs AS (
+    SELECT
+        a.household,
+        a.brand AS brand_1,
+        a.commodity AS category_1,
+        b.brand AS brand_2,
+        b.commodity AS category_2
+    FROM
+        household_brand_category a
+    JOIN household_brand_category b
+        ON a.household = b.household
+        AND a.brand < b.brand
+)
+SELECT
+    category_1,
+    brand_1,
+    category_2,
+    brand_2,
+    COUNT(DISTINCT household) AS num_households
+FROM
+    brand_pairs
+GROUP BY
+    category_1, brand_1, category_2, brand_2
+ORDER BY
+    num_households DESC;
+
+-- -------------------------------------------------------------------------------------
+-- #Part 4: Coupon Influence
+-- -------------------------------------------------------------------------------------
+-- 11 . percent of transactions involved coupons, By category & time
 */
+
+CREATE TABLE coupon_influence AS
+with transaction_count as (
+select 
+	count(distinct t.household) as daily_transactions,
+	t.day,
+	p.commodity as category,
+	coalesce(sum(case when coupon =1 then 1 else 0 end),0) as coupon_count,
+	coalesce(sum(case when coupon = 0 then 1 else 0 end),0) as without_coupon
+from transactions t
+	join product_lookup p on t.upc = p.upc
+group by p.commodity, t.day
+)
+select
+	day,
+	category,
+	sum(daily_transactions) as total_households,
+	SUM(coupon_count) AS total_couponed,
+	SUM(without_coupon) AS total_non_couponed,
+	round((sum(coupon_count) * 100.0) / (nullif(sum(coupon_count) + sum(without_coupon),0)),2) as coupon_rate,
+	ROUND(SUM(without_coupon) * 100.0 / NULLIF(SUM(coupon_count) + SUM(without_coupon), 0),2) AS without_coupon_rate
+	from transaction_count
+group by day, category
+order by total_households desc, coupon_rate desc
+;
+
+-- -------------------------------------------------------------------------------------
+--Do high-frequency or low-frequency households use more coupons?
+-- setting median value of 63 from part 
+
+WITH total_days AS (
+    SELECT household, day
+    FROM transactions
+    GROUP BY household, day
+),
+days_between_purchases AS (
+    SELECT
+        household,
+        day - LAG(day) OVER (PARTITION BY household ORDER BY day) AS gap
+    FROM total_days
+),
+avg_days AS (
+    SELECT
+        household,
+        ROUND(AVG(gap), 2) AS avg_days_between_purchases
+    FROM days_between_purchases
+    WHERE gap IS NOT NULL
+    GROUP BY household
+),
+coupon_usage AS (
+    SELECT
+        household,
+        COUNT(DISTINCT basket) AS total_txns,
+        COUNT(DISTINCT CASE WHEN coupon = 1 THEN basket END) AS coupon_txns,
+        ROUND(
+            COUNT(DISTINCT CASE WHEN coupon = 1 THEN basket END) * 100.0 /
+            NULLIF(COUNT(DISTINCT basket), 0),
+            2
+        ) AS couponed_usage_rate
+    FROM transactions
+    GROUP BY household
+),
+combined_summary AS (
+    SELECT
+        cu.household,
+        COALESCE(ad.avg_days_between_purchases, 9999) AS avg_days_between_purchases,
+        cu.couponed_usage_rate,
+        CASE 
+            WHEN COALESCE(ad.avg_days_between_purchases, 9999) < 63.33 THEN 'high-frequency'
+            ELSE 'low-frequency'
+        END AS frequency_segment
+    FROM coupon_usage cu
+    LEFT JOIN avg_days ad ON cu.household = ad.household
+)
+SELECT
+    frequency_segment,
+    COUNT(*) AS num_households,
+    ROUND(AVG(couponed_usage_rate), 2) AS avg_coupon_usage_percent
+FROM
+    combined_summary
+GROUP BY frequency_segment
+ORDER BY frequency_segment;
+
+
+-- "high-frequency"	177555	2.03
+-- "low-frequency"	332380	1.48
 
 
 -- -------------------------------------------------------------------------------------
+-- #Part 5: RFM segmentation
+-- -------------------------------------------------------------------------------------
+-- 14. Recency-Frequency-Monetary (RFM) Segmentation:
 
-
-/*
-#Part 3: Cross-Category Behavior
-
-## Goal: Explore opportunities for cross-sell
-
-8. How many households purchased both Pasta and Pasta Sauce?
-- Penetration of cross-category shoppers
-9. What are the most common product combinations across categories
-E.g., Barilla Pasta + Ragu Sauce
-10. Are there households who buy only one category?
-- Potential to target with cross-promotions
-*/
-
-
+CREATE TABLE rfm AS
+WITH recency AS (
+    SELECT
+        household,
+        728 - MAX(day) AS recency_days
+    FROM
+        transactions
+    GROUP BY
+        household
+),
+frequency AS (
+    SELECT
+        household,
+        COUNT(DISTINCT basket) AS total_transactions
+    FROM
+        transactions
+    GROUP BY
+        household
+),
+monetary AS (
+    SELECT
+        household,
+        SUM(dollar_sales) AS total_spend
+    FROM
+        transactions
+    GROUP BY
+        household
+)
+SELECT
+    r.household,
+    r.recency_days,
+    f.total_transactions,
+    m.total_spend
+FROM
+    recency r
+JOIN frequency f ON r.household = f.household
+JOIN monetary m ON r.household = m.household
+ORDER BY
+    r.recency_days ASC; 
 
 -- -------------------------------------------------------------------------------------
+-- 15. Category Penetration: Get total unique households
 
-
-
+WITH total_households AS (
+    SELECT COUNT(DISTINCT household) AS total FROM transactions
+),
+category_households AS (
+    SELECT
+        p.commodity,
+        COUNT(DISTINCT t.household) AS category_shoppers
+    FROM
+        transactions t
+        JOIN product_lookup p ON t.upc = p.upc
+    GROUP BY
+        p.commodity
+)
+SELECT
+    c.commodity,
+    c.category_shoppers,
+    t.total,
+    ROUND(c.category_shoppers * 100.0 / t.total, 2) AS penetration_percent
+FROM
+    category_households c
+    CROSS JOIN total_households t
+ORDER BY
+    penetration_percent DESC;
 /*
-
-#Part 4: Coupon Influence
-
-## Goal: Measure impact of coupons on behavior
-
-11. What percent of transactions involved coupons?
-- By category
-- Over time
-12. Did customers first purchase an item or category using a coupon?
-- If so, did they become repeat buyers?
-13. Is coupon usage higher among low-frequency or high-frequency households?
+"pasta"	411356	509935	80.67
+"pasta sauce"	362234	509935	71.04
+"syrups"	256476	509935	50.30
+"pancake mixes"	130542	509935	25.60
 */
--- -------------------------------------------------------------------------------------
 
+-- 16.  Brand Switching Triggers:
+-- Are brand switchers more likely to have used coupons or promotions?
 
-
-/*
-#Part 5: RFM segmentation
-
-14. Recency-Frequency-Monetary (RFM) Segmentation:
-- When did households last purchase?
-- How frequently do they buy?
-- How much do they spend?
-
-15. Category Penetration:
-- For each category, what percent of total households participated?
-- E.g., “68% of households purchased Pasta Sauce”
-
-16.  Brand Switching Triggers:
-- Are brand switchers more likely to have used coupons or promotions?
-*/
+WITH brand_behavior AS (
+    SELECT
+        t.household,
+        p.commodity,
+        COUNT(DISTINCT p.brand) AS brand_count,
+        COUNT(DISTINCT CASE WHEN t.coupon = 1 THEN t.basket END) AS coupon_txns,
+        COUNT(DISTINCT t.basket) AS total_txns
+    FROM
+        transactions t
+        JOIN product_lookup p ON t.upc = p.upc
+    GROUP BY
+        t.household, p.commodity
+),
+classified AS (
+    SELECT
+        *,
+        CASE 
+            WHEN brand_count > 1 THEN 'Switcher'
+            ELSE 'Loyalist'
+        END AS shopper_type
+    FROM
+        brand_behavior
+)
+SELECT
+    commodity,
+    shopper_type,
+    COUNT(*) AS num_households,
+    ROUND(AVG(coupon_txns * 100.0 / NULLIF(total_txns, 0)), 2) AS avg_coupon_usage_percent
+FROM
+    classified
+GROUP BY
+    commodity, shopper_type
+ORDER BY
+    commodity, shopper_type
+;
